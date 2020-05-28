@@ -82,6 +82,43 @@ func (h *handler) GetTreesByHouseID(w http.ResponseWriter, req *http.Request) {
 	sendJSON(w, trees)
 }
 
+// AddHouse plants a new tree on location at a given house.
+func (h *handler) AddHouse(w http.ResponseWriter, req *http.Request) {
+	var house House
+	err := json.NewDecoder(req.Body).Decode(&house)
+	if err != nil {
+		log.Println(err)
+		sendError(w, "error decoding request body as House", 400)
+		return
+	}
+
+	if house.AddressOne == "" {
+		sendError(w, "must specify address one", 400)
+		return
+	}
+	if house.City == "" {
+		sendError(w, "must specify city", 400)
+		return
+	}
+	if house.State == "" {
+		sendError(w, "must specify state", 400)
+		return
+	}
+	if house.State == "" {
+		sendError(w, "must specify zip", 400)
+		return
+	}
+
+	err = h.store.AddHouse(&house)
+	if err != nil {
+		log.Println(err)
+		sendError(w, "server error adding House", 500)
+		return
+	}
+
+	sendJSON(w, house)
+}
+
 // AddTreeByHouseID plants a new tree on location at a given house.
 func (h *handler) AddTreeByHouseID(w http.ResponseWriter, req *http.Request) {
 	houseID, err := getInt32Param(req, "houseID")
@@ -110,13 +147,16 @@ func (h *handler) AddTreeByHouseID(w http.ResponseWriter, req *http.Request) {
 	}
 
 	if tree.Species == "" {
-		sendError(w, "must specify a non-empty species", 400)
+		sendError(w, "must specify species", 400)
+		return
 	}
 	if tree.XCoord <= 0 || tree.XCoord > 255 {
 		sendError(w, "must specify an x coordinate between 1-255", 400)
+		return
 	}
 	if tree.YCoord <= 0 || tree.YCoord > 255 {
 		sendError(w, "must specify a y coordinate between 1-255", 400)
+		return
 	}
 
 	err = h.store.AddTreeByHouseID(&tree, houseID)
@@ -126,7 +166,7 @@ func (h *handler) AddTreeByHouseID(w http.ResponseWriter, req *http.Request) {
 			sendError(w, err.Error(), 400)
 			return
 		}
-		sendError(w, "server error adding tree", 500)
+		sendError(w, "server error adding Tree", 500)
 		return
 	}
 
@@ -203,7 +243,6 @@ func (h *handler) RemoveTreeByTreeID(w http.ResponseWriter, req *http.Request) {
 	}
 
 	w.WriteHeader(200)
-	return
 }
 
 func getInt32Param(req *http.Request, key string) (int32, error) {

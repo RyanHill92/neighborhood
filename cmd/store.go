@@ -21,6 +21,7 @@ const (
 	queryGetHouseExistsByHouseID = "get-house-exists-by-house-id"
 	queryGetTreesByHouseID       = "get-trees-by-house-id"
 	queryAddTreeByHouseID        = "add-tree-by-house-id"
+	queryAddHouse                = "add-house"
 	queryGetTreeIDsByHouseID     = "get-tree-ids-by-house-id"
 	queryFellTreeByTreeID        = "fell-tree-by-tree-id"
 	queryGetTreeFallenByTreeID   = "get-tree-fallen-by-tree-id"
@@ -67,6 +68,10 @@ var unprepared = map[string]string{
 		WHERE 
 			t.house_id = ?
 		ORDER BY t.id ASC;
+	`,
+	queryAddHouse: `
+		INSERT INTO neighborhood.house (address_one, address_two, city, state, zip)
+		VALUES (?, ?, ?, ?, ?);
 	`,
 	queryAddTreeByHouseID: `
 		INSERT INTO neighborhood.tree (house_id, species, x_coord, y_coord, relative_location)
@@ -193,10 +198,27 @@ func (store *MySQLStore) GetTreesByHouseID(houseID int32) ([]Tree, error) {
 	return trees, nil
 }
 
+// AddHouse builds a new house in the neighborhood.
+func (store *MySQLStore) AddHouse(h *House) error {
+	stmt := store.stmts[queryAddHouse]
+	result, err := stmt.Exec(h.AddressOne, nullIfEmpty(h.AddressTwo), h.City, h.State, h.Zip)
+	if err != nil {
+		return fmt.Errorf("INSERT House failed: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("error reading last INSERT id: %w", err)
+	}
+
+	h.ID = int32(id)
+	return nil
+}
+
 // AddTreeByHouseID plants a new tree on-site at a specific house.
 func (store *MySQLStore) AddTreeByHouseID(t *Tree, houseID int32) error {
 	stmt := store.stmts[queryAddTreeByHouseID]
-	result, err := stmt.Exec(houseID, t.Species, t.XCoord, t.YCoord, t.RelativeLocation)
+	result, err := stmt.Exec(houseID, t.Species, t.XCoord, t.YCoord, nullIfEmpty(t.RelativeLocation))
 	if err != nil {
 		var mysqlErr *mysql.MySQLError
 		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
@@ -323,4 +345,12 @@ func emptyIfNull(nullString sql.NullString) string {
 		return nullString.String
 	}
 	return ""
+}
+
+func nullIfEmpty(s string) sql.NullString {
+	valid := s != ""
+	return sql.NullString{
+		String: s,
+		Valid:  valid,
+	}
 }

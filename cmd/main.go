@@ -87,6 +87,7 @@ func run() error {
 	router := mux.NewRouter()
 	router.HandleFunc("/", handler.ReportHealth)
 	router.HandleFunc("/houses", handler.GetAllHouses).Methods("GET")
+	router.HandleFunc("/houses", handler.AddHouse).Methods("POST")
 	router.HandleFunc("/trees/{houseID}", handler.GetTreesByHouseID).Methods("GET")
 	router.HandleFunc("/trees/{houseID}", handler.AddTreeByHouseID).Methods("POST")
 	router.HandleFunc("/trees/{treeID}", handler.RemoveTreeByTreeID).Methods("DELETE")
