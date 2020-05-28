@@ -1,0 +1,34 @@
+version: '3'
+services:
+  data:
+    image: mysql
+    ports:
+      - 3456:3306
+    environment:
+      MYSQL_ROOT_PASSWORD: r00t
+      MYSQL_DATABASE: neighborhood
+    volumes:
+      - ./sql/:/docker-entrypoint-initdb.d
+      - neighborhood-db:/var/lib/mysql
+    networks:
+      - neighborhood
+  app:
+      build: .
+      ports: 
+        - 5000:5000
+      environment:
+        DB_USER: root
+        DB_PASSWORD: r00t
+        DB_HOST: data
+        DB_NAME: neighborhood
+      depends_on:
+        - data
+      networks:
+      - neighborhood
+    
+networks:
+  neighborhood:
+
+volumes:
+  neighborhood-db:
+    driver: local
