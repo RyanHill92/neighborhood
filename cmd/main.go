@@ -89,6 +89,8 @@ func run() error {
 	router.HandleFunc("/houses", handler.GetAllHouses).Methods("GET")
 	router.HandleFunc("/trees/{houseID}", handler.GetTreesByHouseID).Methods("GET")
 	router.HandleFunc("/trees/{houseID}", handler.AddTreeByHouseID).Methods("POST")
+	router.HandleFunc("/trees/{treeID}", handler.RemoveTreeByTreeID).Methods("DELETE")
+	router.HandleFunc("/storm/{houseID}", handler.SendStormByHouseID).Methods("POST")
 
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)

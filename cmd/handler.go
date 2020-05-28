@@ -36,7 +36,7 @@ func (h *handler) GetAllHouses(w http.ResponseWriter, req *http.Request) {
 	houses, err := h.store.GetAllHouses()
 	if err != nil {
 		log.Println(err)
-		sendError(w, "server error", 500)
+		sendError(w, "server error getting houses", 500)
 		return
 	}
 
@@ -50,31 +50,54 @@ func (h *handler) GetAllHouses(w http.ResponseWriter, req *http.Request) {
 
 // GetTreesByHouseID lists all trees growing on-site at a specific house.
 func (h *handler) GetTreesByHouseID(w http.ResponseWriter, req *http.Request) {
-	houseID, err := getHouseID(req)
+	houseID, err := getInt32Param(req, "houseID")
 	if err != nil {
 		sendError(w, err.Error(), 400)
+		return
+	}
+
+	exists, err := h.store.GetHouseExistsByHouseID(houseID)
+	if err != nil {
+		log.Println(err)
+		sendError(w, "server error getting House", 500)
+		return
+	}
+	if !exists {
+		sendError(w, fmt.Sprintf("no House exists with ID %v", houseID), 404)
 		return
 	}
 
 	trees, err := h.store.GetTreesByHouseID(houseID)
 	if err != nil {
 		log.Println(err)
-		sendError(w, "server error", 500)
+		sendError(w, "server error getting Trees", 500)
 		return
 	}
 
 	if len(trees) == 0 {
-		sendError(w, fmt.Sprintf("no trees found for house %v", houseID), 404)
+		sendError(w, fmt.Sprintf("no trees growing at house %v", houseID), 404)
 		return
 	}
 
 	sendJSON(w, trees)
 }
 
+// AddTreeByHouseID plants a new tree on location at a given house.
 func (h *handler) AddTreeByHouseID(w http.ResponseWriter, req *http.Request) {
-	houseID, err := getHouseID(req)
+	houseID, err := getInt32Param(req, "houseID")
 	if err != nil {
 		sendError(w, err.Error(), 400)
+		return
+	}
+
+	exists, err := h.store.GetHouseExistsByHouseID(houseID)
+	if err != nil {
+		log.Println(err)
+		sendError(w, "server error getting House", 500)
+		return
+	}
+	if !exists {
+		sendError(w, fmt.Sprintf("no House exists with ID %v", houseID), 404)
 		return
 	}
 
@@ -89,55 +112,122 @@ func (h *handler) AddTreeByHouseID(w http.ResponseWriter, req *http.Request) {
 	if tree.Species == "" {
 		sendError(w, "must specify a non-empty species", 400)
 	}
-	if tree.XCoord <= 0 {
-		sendError(w, "must specify a positive, non-zero x coordinate", 400)
+	if tree.XCoord <= 0 || tree.XCoord > 255 {
+		sendError(w, "must specify an x coordinate between 1-255", 400)
 	}
-	if tree.YCoord <= 0 {
-		sendError(w, "must specify a positive, non-zero y coordinate", 400)
+	if tree.YCoord <= 0 || tree.YCoord > 255 {
+		sendError(w, "must specify a y coordinate between 1-255", 400)
 	}
 
 	err = h.store.AddTreeByHouseID(&tree, houseID)
 	if err != nil {
 		log.Println(err)
-		msg := "server error"
 		if errors.Is(err, ErrDuplicateTree) {
-			msg = err.Error()
+			sendError(w, err.Error(), 400)
+			return
 		}
-		sendError(w, msg, 500)
+		sendError(w, "server error adding tree", 500)
 		return
 	}
 
 	sendJSON(w, tree)
 }
 
-func getHouseID(req *http.Request) (int32, error) {
-	vars := mux.Vars(req)
-	houseIDStr, _ := vars["houseID"]
-	houseID, err := strconv.ParseInt(houseIDStr, 10, 32)
-
-	if err != nil || houseID == 0 {
-		return 0, errors.New("path must include a valid, non-zero house ID")
+// SendStormByHouseID brings down a random tree at a given home site.
+func (h *handler) SendStormByHouseID(w http.ResponseWriter, req *http.Request) {
+	houseID, err := getInt32Param(req, "houseID")
+	if err != nil {
+		sendError(w, err.Error(), 400)
+		return
 	}
 
-	return int32(houseID), nil
+	exists, err := h.store.GetHouseExistsByHouseID(houseID)
+	if err != nil {
+		log.Println(err)
+		sendError(w, "server error getting House", 500)
+		return
+	}
+	if !exists {
+		sendError(w, fmt.Sprintf("no House exists with ID %v", houseID), 404)
+		return
+	}
+
+	err = h.store.FellRandomTreeByHouseID(houseID)
+	if err != nil {
+		log.Println(err)
+		if errors.Is(err, ErrNoTrees) {
+			sendError(w, err.Error(), 400)
+			return
+		}
+		sendError(w, "server error sending storm", 500)
+		return
+	}
+
+	trees, err := h.store.GetTreesByHouseID(houseID)
+	if err != nil {
+		sendError(w, "server error getting trees post-storm", 500)
+		return
+	}
+
+	sendJSON(w, trees)
+}
+
+// RemoveTreeByTreeID removes a fallen tree or else complains that it's still thriving.
+func (h *handler) RemoveTreeByTreeID(w http.ResponseWriter, req *http.Request) {
+	treeID, err := getInt32Param(req, "treeID")
+	if err != nil {
+		sendError(w, err.Error(), 400)
+		return
+	}
+
+	fallen, err := h.store.GetTreeFallenByTreeID(treeID)
+	if err != nil {
+		log.Println(err)
+		if errors.Is(err, ErrNoMatchingRecord) {
+			sendError(w, fmt.Sprintf("no Tree found with ID %v", treeID), 404)
+			return
+		}
+		sendError(w, "server error getting Tree", 500)
+		return
+	}
+
+	if !fallen {
+		sendError(w, "call us back when the Tree falls", 400)
+		return
+	}
+
+	err = h.store.RemoveTreeByTreeID(treeID)
+	if err != nil {
+		sendError(w, "server error removing Tree", 500)
+		return
+	}
+
+	w.WriteHeader(200)
+	return
+}
+
+func getInt32Param(req *http.Request, key string) (int32, error) {
+	vars := mux.Vars(req)
+	paramStr, _ := vars[key]
+	paramInt, err := strconv.ParseInt(paramStr, 10, 32)
+
+	if err != nil || paramInt == 0 {
+		return 0, errors.New("param %s must be a valid, non-zero numeral")
+	}
+
+	return int32(paramInt), nil
 }
 
 func sendError(w http.ResponseWriter, msg string, status int) {
 	err := ErrorResponse{
 		Message: msg,
 	}
+	w.Header().Add("Content-Type", "application/json")
 	w.WriteHeader(status)
-	sendJSON(w, err)
+	json.NewEncoder(w).Encode(err)
 }
 
 func sendJSON(w http.ResponseWriter, object interface{}) {
 	w.Header().Add("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(object)
-	return
 }
-
-// GET Trees by House ID
-// GET House by ID
-// POST Tree by House ID
-// POST House
-// POST Storm by ???

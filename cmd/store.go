@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/rand"
 
 	"github.com/go-sql-driver/mysql"
 )
@@ -16,14 +17,23 @@ type MySQLStore struct {
 }
 
 const (
-	queryGetAllHouses      = "get-all-houses"
-	queryGetTreesByHouseID = "get-trees-by-house-id"
-	queryAddTreeByHouseID  = "add-tree-by-house-id"
+	queryGetAllHouses            = "get-all-houses"
+	queryGetHouseExistsByHouseID = "get-house-exists-by-house-id"
+	queryGetTreesByHouseID       = "get-trees-by-house-id"
+	queryAddTreeByHouseID        = "add-tree-by-house-id"
+	queryGetTreeIDsByHouseID     = "get-tree-ids-by-house-id"
+	queryFellTreeByTreeID        = "fell-tree-by-tree-id"
+	queryGetTreeFallenByTreeID   = "get-tree-fallen-by-tree-id"
+	queryRemoveTreeByTreeID      = "delete-tree-by-tree-id"
 )
 
 var (
 	// ErrDuplicateTree reports an attempt to plant a tree at the exact coordinates and house where one is already growing.
 	ErrDuplicateTree = errors.New("tree already growing at given house and absolute location")
+	// ErrNoMatchingRecord reports a bad lookup ID.
+	ErrNoMatchingRecord = errors.New("no record matching ID")
+	// ErrNoTrees reports a tree-less house.
+	ErrNoTrees = errors.New("no trees at house")
 )
 
 var unprepared = map[string]string{
@@ -37,6 +47,13 @@ var unprepared = map[string]string{
 			h.zip
 		FROM neighborhood.house h
 		ORDER BY h.id ASC;
+	`,
+	queryGetHouseExistsByHouseID: `
+		SELECT EXISTS (
+			SELECT * 
+			FROM neighborhood.house h
+			WHERE h.id = ?
+		);
 	`,
 	queryGetTreesByHouseID: `
 		SELECT 
@@ -54,6 +71,29 @@ var unprepared = map[string]string{
 	queryAddTreeByHouseID: `
 		INSERT INTO neighborhood.tree (house_id, species, x_coord, y_coord, relative_location)
 		VALUES (?, ?, ?, ?, ?);
+	`,
+	queryFellTreeByTreeID: `
+		UPDATE neighborhood.tree t
+		SET t.fallen = 1
+		WHERE t.id = ?;
+	`,
+	queryGetTreeIDsByHouseID: `
+		SELECT
+			t.id
+		FROM neighborhood.house h
+		JOIN neighborhood.tree t ON t.house_id = h.id
+		WHERE h.id = ?;
+	`,
+	queryGetTreeFallenByTreeID: `
+		SELECT 
+			t.fallen
+		FROM neighborhood.tree t
+		WHERE t.id = ?;
+	`,
+	queryRemoveTreeByTreeID: `
+		DELETE FROM neighborhood.tree t
+		WHERE
+			t.id = ?;
 	`,
 }
 
@@ -108,10 +148,22 @@ func (store *MySQLStore) GetAllHouses() ([]House, error) {
 	return houses, nil
 }
 
+// GetHouseExistsByHouseID reports whether a given House ID matches a record in the DB.
+func (store *MySQLStore) GetHouseExistsByHouseID(houseID int32) (bool, error) {
+	stmt := store.stmts[queryGetHouseExistsByHouseID]
+	row := stmt.QueryRow(houseID)
+
+	var exists bool
+	if err := row.Scan(&exists); err != nil {
+		return false, fmt.Errorf("error reading row as whether House exists: %w", err)
+	}
+
+	return exists, nil
+}
+
 // GetTreesByHouseID lists trees for a given House ID.
 func (store *MySQLStore) GetTreesByHouseID(houseID int32) ([]Tree, error) {
 	stmt := store.stmts[queryGetTreesByHouseID]
-
 	rows, err := stmt.Query(houseID)
 	if err != nil {
 		return nil, fmt.Errorf("SELECT Trees failed: %w", err)
@@ -144,7 +196,6 @@ func (store *MySQLStore) GetTreesByHouseID(houseID int32) ([]Tree, error) {
 // AddTreeByHouseID plants a new tree on-site at a specific house.
 func (store *MySQLStore) AddTreeByHouseID(t *Tree, houseID int32) error {
 	stmt := store.stmts[queryAddTreeByHouseID]
-
 	result, err := stmt.Exec(houseID, t.Species, t.XCoord, t.YCoord, t.RelativeLocation)
 	if err != nil {
 		var mysqlErr *mysql.MySQLError
@@ -156,10 +207,103 @@ func (store *MySQLStore) AddTreeByHouseID(t *Tree, houseID int32) error {
 
 	id, err := result.LastInsertId()
 	if err != nil {
-		return fmt.Errorf("error reading last INSERT id")
+		return fmt.Errorf("error reading last INSERT id: %w", err)
 	}
 
 	t.ID = int32(id)
+	return nil
+}
+
+// FellRandomTreeByHouseID fells a random tree at a given house.
+func (store *MySQLStore) FellRandomTreeByHouseID(houseID int32) error {
+	tx, err := store.db.Begin()
+	if err != nil {
+		return fmt.Errorf("error initiating DB transaction: %w", err)
+	}
+
+	rows, err := tx.Stmt(store.stmts[queryGetTreeIDsByHouseID]).Query(houseID)
+	if err != nil {
+		tx.Rollback()
+		return fmt.Errorf("SELECT Trees failed: %w", err)
+	}
+
+	defer rows.Close()
+
+	var treeIDs []int32
+	for rows.Next() {
+		var treeID int32
+		err := rows.Scan(&treeID)
+		if err != nil {
+			tx.Rollback()
+			return fmt.Errorf("failed to parse row as Tree ID: %w", err)
+		}
+		treeIDs = append(treeIDs, treeID)
+	}
+
+	if len(treeIDs) == 0 {
+		tx.Rollback()
+		return ErrNoTrees
+	}
+
+	randIndex := rand.Intn(len(treeIDs) - 1)
+
+	result, err := tx.Stmt(store.stmts[queryFellTreeByTreeID]).Exec(treeIDs[randIndex])
+	if err != nil {
+		tx.Rollback()
+		return fmt.Errorf("failed to UPDATE Trees: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("error reading rows affected: %w", err)
+	}
+
+	log.Printf("%v tree(s) felled by storm", rowsAffected)
+
+	err = tx.Commit()
+	if err != nil {
+		tx.Rollback()
+		return fmt.Errorf("failed to commit DB transaction: %w", err)
+	}
+
+	log.Printf("storm damage at house %v committed to DB", houseID)
+
+	return nil
+}
+
+// GetTreeFallenByTreeID reports whether a given tree is fallen.
+func (store *MySQLStore) GetTreeFallenByTreeID(treeID int32) (bool, error) {
+	stmt := store.stmts[queryGetTreeFallenByTreeID]
+	row := stmt.QueryRow(treeID)
+
+	var fallen bool
+	if err := row.Scan(&fallen); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, ErrNoMatchingRecord
+		}
+		return false, fmt.Errorf("error parsing row as Fallen: %w", err)
+	}
+
+	return fallen, nil
+}
+
+// RemoveTreeByTreeID removes a tree from a house site.
+func (store *MySQLStore) RemoveTreeByTreeID(treeID int32) error {
+	stmt := store.stmts[queryRemoveTreeByTreeID]
+	result, err := stmt.Exec(treeID)
+	if err != nil {
+		return fmt.Errorf("error running DELETE Tree: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("error reading rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("no rows affected by DELETE Tree: %w", err)
+	}
+
 	return nil
 }
 
