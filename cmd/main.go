@@ -60,6 +60,11 @@ func run() error {
 		return fmt.Errorf("error opening DB connection: %w", err)
 	}
 
+	defer func() {
+		log.Println("main: closing database")
+		db.Close()
+	}()
+
 	for {
 		time.Sleep(200 * time.Millisecond)
 		if db.Ping() == nil {
@@ -71,6 +76,11 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("error initializing store: %w", err)
 	}
+
+	defer func() {
+		log.Println("main: closing store")
+		store.Close()
+	}()
 
 	handler := &handler{store: store}
 
@@ -88,17 +98,6 @@ func run() error {
 	go func() {
 		log.Println("web service listening on port 5000")
 		serverErrors <- http.ListenAndServe(":5000", router)
-	}()
-
-	// Deferred functions execute LIFO
-	defer func() {
-		log.Println("main: closing store")
-		store.Close()
-	}()
-
-	defer func() {
-		log.Println("main: closing database")
-		db.Close()
 	}()
 
 	select {
